@@ -2,14 +2,17 @@ use std::fmt::{Debug, Display, Formatter};
 
 use base58::ToBase58;
 use eyre::{bail, Result};
-use nom_derive::Nom;
+use nom::bytes::streaming::take;
+use nom::combinator::map_res;
 use rand::Rng;
+
+use crate::SansIo;
 
 /// A 20 byte hash of a torrent, technically _any_ bytes but usually implemented as:
 /// -XY1234-<random characters>
 /// where XY is an application-specific identifier, 1234 is a version number, and the random
 /// characters are a unique identifier for the peer.
-#[derive(Nom, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PeerId([u8; 20]);
 
 impl PeerId {
@@ -77,6 +80,17 @@ fn random_base58_bytes(rng: &mut impl Rng, length: usize) -> Vec<u8> {
         .take(length)
         .map(|index| ALPHABET[index])
         .collect()
+}
+
+impl SansIo for PeerId {
+    fn decode(i: &[u8]) -> nom::IResult<&[u8], Self> {
+        let (i, peer_id) = map_res(take(20usize), TryInto::try_into)(i)?;
+        Ok((i, Self(peer_id)))
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        self.0.to_vec()
+    }
 }
 
 impl Display for PeerId {

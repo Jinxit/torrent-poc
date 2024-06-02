@@ -2,10 +2,13 @@ use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 
-use nom_derive::Nom;
+use nom::bytes::streaming::take;
+use nom::combinator::map_res;
+
+use crate::SansIo;
 
 /// A 20 byte hash of a torrent, usually represented as a hex string.
-#[derive(Nom, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InfoHash([u8; 20]);
 
 impl InfoHash {
@@ -13,6 +16,17 @@ impl InfoHash {
     #[must_use]
     pub fn new(hash: [u8; 20]) -> Self {
         Self(hash)
+    }
+}
+
+impl SansIo for InfoHash {
+    fn decode(i: &[u8]) -> nom::IResult<&[u8], Self> {
+        let (i, info_hash) = map_res(take(20usize), TryInto::try_into)(i)?;
+        Ok((i, Self(info_hash)))
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        self.0.to_vec()
     }
 }
 
