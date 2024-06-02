@@ -2,8 +2,10 @@ use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 
+use nom_derive::Nom;
+
 /// A 20 byte hash of a torrent, usually represented as a hex string.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Nom, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InfoHash([u8; 20]);
 
 impl InfoHash {
@@ -42,6 +44,12 @@ impl Display for InfoHash {
 impl Debug for InfoHash {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "InfoHash({})", hex::encode(self.0))
+    }
+}
+
+impl From<InfoHash> for Vec<u8> {
+    fn from(info_hash: InfoHash) -> Self {
+        info_hash.0.to_vec()
     }
 }
 

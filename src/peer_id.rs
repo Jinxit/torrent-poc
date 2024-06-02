@@ -2,13 +2,14 @@ use std::fmt::{Debug, Display, Formatter};
 
 use base58::ToBase58;
 use eyre::{bail, Result};
+use nom_derive::Nom;
 use rand::Rng;
 
 /// A 20 byte hash of a torrent, technically _any_ bytes but usually implemented as:
 /// -XY1234-<random characters>
 /// where XY is an application-specific identifier, 1234 is a version number, and the random
 /// characters are a unique identifier for the peer.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Nom, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PeerId([u8; 20]);
 
 impl PeerId {
@@ -90,6 +91,12 @@ impl Display for PeerId {
 impl Debug for PeerId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "PeerId({})", String::from_utf8_lossy(&self.0))
+    }
+}
+
+impl From<PeerId> for Vec<u8> {
+    fn from(peer_id: PeerId) -> Self {
+        peer_id.0.to_vec()
     }
 }
 
