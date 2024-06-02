@@ -3,6 +3,8 @@ use std::net::IpAddr;
 use clap::Parser;
 use tracing::info;
 
+use torrent_poc::InfoHash;
+
 /// A simple program to handshake with a known BitTorrent peer for a given Torrent info hash
 ///
 /// Normally torrent clients and servers are the same thing (as it's a P2P protocol),
@@ -22,7 +24,7 @@ enum Cli {
 
         /// Info hash of the torrent to leech
         #[arg(long)]
-        info_hash: String,
+        info_hash: InfoHash,
     },
     Seed {
         /// IP address to listen on (defaults to all interfaces)
@@ -35,7 +37,7 @@ enum Cli {
 
         /// Info hash of the torrent to seed
         #[arg(long)]
-        info_hash: String,
+        info_hash: InfoHash,
     },
 }
 
