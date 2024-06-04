@@ -99,7 +99,7 @@ impl Actor for ConnectionActor {
         if let Some(peer_id) = self.expected_peer_id {
             let _ = self.torrent.act(move |torrent| {
                 torrent.remove_connection(peer_id);
-                Ok(Outcome::Stop)
+                Ok(Outcome::Continue)
             });
         }
     }
