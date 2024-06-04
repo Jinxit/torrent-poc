@@ -10,6 +10,11 @@ use crate::actor::actor::Actor;
 use crate::actor::outcome::Outcome;
 
 /// A handle to an actor. It can be used to send actions to the actor, and to stop it.
+///
+/// Note that an actor *may* not be stopped when the handle is dropped. If the actor
+/// is holding on to a Handle to itself, it will keep running forever, as the Sender
+/// is never dropped. If *nothing* (including the actor) is holding on to a Handle,
+/// the actor will stop when the handle is dropped.
 #[derive(Debug)]
 pub struct Handle<A>
 where

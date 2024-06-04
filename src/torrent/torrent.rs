@@ -7,7 +7,7 @@ use crate::torrent::torrent_actor::TorrentActor;
 use crate::{Connection, InfoHash, PeerId};
 
 /// This is the main entry point for this library, a "root aggregate" if you will.
-/// It's a cloneable handle to the torrent actor.
+/// It's a cloneable handle (reference) to the torrent actor.
 #[derive(Clone)]
 pub struct Torrent {
     actor: Handle<TorrentActor>,
@@ -28,6 +28,17 @@ impl Torrent {
     ) -> Result<()> {
         self.actor.act(move |torrent| {
             torrent.connect_to_peer(expected_peer_id, connection)?;
+            Ok(Outcome::Continue)
+        })
+    }
+
+    pub fn accept_peer_connection(
+        &self,
+        expected_peer_id: Option<PeerId>,
+        connection: impl Connection + Send + 'static,
+    ) -> Result<()> {
+        self.actor.act(move |torrent| {
+            torrent.accept_peer_connection(expected_peer_id, connection)?;
             Ok(Outcome::Continue)
         })
     }

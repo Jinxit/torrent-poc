@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use eyre::OptionExt;
+use eyre::{OptionExt, Result};
 use tracing::info;
 
 use crate::actor::actor::Actor;
@@ -32,7 +32,7 @@ impl TorrentActor {
         &mut self,
         expected_peer_id: Option<PeerId>,
         connection: impl Connection + Send + 'static,
-    ) -> eyre::Result<Outcome> {
+    ) -> Result<Outcome> {
         let actor = Handle::spawn(ConnectionActor::new(
             self.own_peer_id,
             expected_peer_id,
@@ -44,7 +44,23 @@ impl TorrentActor {
         Ok(Outcome::Continue)
     }
 
-    pub fn send(&mut self, peer_id: PeerId, message: String) -> eyre::Result<Outcome> {
+    pub fn accept_peer_connection(
+        &mut self,
+        expected_peer_id: Option<PeerId>,
+        connection: impl Connection + Send + 'static,
+    ) -> Result<Outcome> {
+        let actor = Handle::spawn(ConnectionActor::new(
+            self.own_peer_id,
+            expected_peer_id,
+            connection,
+            self.info_hash,
+            self.handle.clone().ok_or_eyre("Handle not set")?,
+        ));
+        actor.act(ConnectionActor::await_handshake)?;
+        Ok(Outcome::Continue)
+    }
+
+    pub fn send(&mut self, peer_id: PeerId, message: String) -> Result<Outcome> {
         self.connections
             .get(&peer_id)
             .ok_or_eyre("Peer not connected")?
@@ -58,10 +74,12 @@ impl TorrentActor {
 
     pub fn add_connection(&mut self, peer_id: PeerId, connection: Handle<ConnectionActor>) {
         self.connections.insert(peer_id, connection);
+        info!("TorrentActor added connection to peer {}", peer_id);
     }
 
     pub fn remove_connection(&mut self, peer_id: PeerId) {
         self.connections.remove(&peer_id);
+        info!("TorrentActor removed connection to peer {}", peer_id);
     }
 }
 

@@ -1,5 +1,5 @@
 use std::io::{BufReader, BufWriter};
-use std::net::{IpAddr, TcpStream};
+use std::net::{IpAddr, TcpListener, TcpStream};
 
 use clap::Parser;
 use tracing::info;
@@ -50,6 +50,7 @@ fn main() -> Result<(), eyre::Report> {
     let minor = env!("CARGO_PKG_VERSION_MINOR");
     let patch = env!("CARGO_PKG_VERSION_PATCH");
     let own_peer_id = PeerId::random(b"Rp", major.parse()?, minor.parse()?, patch.parse()?)?;
+    info!("My peer ID: {}", own_peer_id);
 
     let cli = Cli::parse();
     match cli {
@@ -76,10 +77,16 @@ fn main() -> Result<(), eyre::Report> {
             port,
             info_hash,
         } => {
-            // TODO: get random port from OS
             info!("Listening on {}:{}", ip, port);
             info!("Info hash: {}", info_hash);
-            todo!()
+            let torrent = Torrent::new(own_peer_id, info_hash);
+            for stream in TcpListener::bind((ip, port))?.incoming() {
+                let stream = stream?;
+                let reader = BufReader::new(stream.try_clone()?);
+                let writer = BufWriter::new(stream);
+                let connection = StdIoConnection::new(1024, reader, writer);
+                torrent.accept_peer_connection(None, connection)?;
+            }
         }
     }
 

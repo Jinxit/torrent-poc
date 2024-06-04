@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use eyre::{bail, OptionExt};
+use eyre::{bail, OptionExt, Result};
 use tracing::info;
 
 use crate::actor::actor::Actor;
@@ -39,7 +39,8 @@ impl ConnectionActor {
         }
     }
 
-    pub fn initiate_handshake(&mut self) -> eyre::Result<Outcome> {
+    /// Initiate handshake with a peer on an outgoing connection.
+    pub fn initiate_handshake(&mut self) -> Result<Outcome> {
         let mut connection = self.connection.take().expect("connection to be set");
         connection.send(Message::Handshake(Handshake::new(
             self.info_hash,
@@ -60,9 +61,12 @@ impl ConnectionActor {
             self.expected_peer_id = Some(handshake.peer_id);
 
             let handle = self.handle.clone().ok_or_eyre("Handle not set")?;
-            self.torrent.act(move |torrent| {
-                torrent.add_connection(handshake.peer_id, handle);
-                Ok(Outcome::Continue)
+            self.torrent.act({
+                let handle = handle.clone();
+                move |torrent| {
+                    torrent.add_connection(handshake.peer_id, handle);
+                    Ok(Outcome::Continue)
+                }
             })?;
 
             info!("Connection established with peer {}", handshake.peer_id);
@@ -73,14 +77,66 @@ impl ConnectionActor {
                 while let Ok(message) = connection.receive() {
                     info!("Actor received message: {:?}", message);
                 }
+                handle.stop();
             });
         } else {
             bail!("Expected handshake message, peer sent something else: {message:?}");
         }
+
         Ok(Outcome::Continue)
     }
 
-    pub fn send(&mut self, _message: String) -> eyre::Result<Outcome> {
+    /// Wait for a handshake from a peer on an incoming connection.
+    pub fn await_handshake(&mut self) -> Result<Outcome> {
+        // TODO: This has a lot of shared code with `initiate_handshake()`, refactor?
+        let mut connection = self.connection.take().expect("connection to be set");
+
+        let message = connection.receive()?;
+        if let Message::Handshake(handshake) = message {
+            if handshake.info_hash != self.info_hash {
+                bail!("Peer sent an incorrect info hash");
+            }
+
+            if self
+                .expected_peer_id
+                .is_some_and(|expected| expected != handshake.peer_id)
+            {
+                bail!("Peer sent an incorrect peer id");
+            }
+            self.expected_peer_id = Some(handshake.peer_id);
+
+            connection.send(Message::Handshake(Handshake::new(
+                self.info_hash,
+                self.own_peer_id,
+            )))?;
+
+            let handle = self.handle.clone().ok_or_eyre("Handle not set")?;
+            self.torrent.act({
+                let handle = handle.clone();
+                move |torrent| {
+                    torrent.add_connection(handshake.peer_id, handle);
+                    Ok(Outcome::Continue)
+                }
+            })?;
+
+            info!("Connection established with peer {}", handshake.peer_id);
+            // TODO: Join handle?
+            let _ = std::thread::spawn(move || {
+                // `receive()` will block until a message is received, so it needs to be run in a
+                // separate thread.
+                while let Ok(message) = connection.receive() {
+                    info!("Actor received message: {:?}", message);
+                }
+                handle.stop();
+            });
+        } else {
+            bail!("Expected handshake message, peer sent something else: {message:?}");
+        }
+
+        Ok(Outcome::Continue)
+    }
+
+    pub fn send(&mut self, _message: String) -> Result<Outcome> {
         info!(
             "TorrentActor sending message to peer {}",
             self.expected_peer_id.unwrap()
