@@ -1,9 +1,10 @@
-use std::net::IpAddr;
+use std::io::{BufReader, BufWriter};
+use std::net::{IpAddr, TcpStream};
 
 use clap::Parser;
 use tracing::info;
 
-use torrent_poc::InfoHash;
+use torrent_poc::{InfoHash, PeerId, StdIoConnection, Torrent};
 
 /// A simple program to handshake with a known BitTorrent peer for a given Torrent info hash
 ///
@@ -45,6 +46,11 @@ fn main() -> Result<(), eyre::Report> {
     tracing_subscriber::fmt::init();
     color_eyre::install()?;
 
+    let major = env!("CARGO_PKG_VERSION_MAJOR");
+    let minor = env!("CARGO_PKG_VERSION_MINOR");
+    let patch = env!("CARGO_PKG_VERSION_PATCH");
+    let own_peer_id = PeerId::random(b"Rp", major.parse()?, minor.parse()?, patch.parse()?)?;
+
     let cli = Cli::parse();
     match cli {
         Cli::Leech {
@@ -54,6 +60,16 @@ fn main() -> Result<(), eyre::Report> {
         } => {
             info!("Connecting to peer at {}:{}", ip, port);
             info!("Info hash: {}", info_hash);
+            let torrent = Torrent::new(own_peer_id, info_hash);
+            let stream = TcpStream::connect((ip, port))?;
+            let reader = BufReader::new(stream.try_clone()?);
+            let writer = BufWriter::new(stream);
+            let connection = StdIoConnection::new(1024, reader, writer);
+            torrent.connect_to_peer(None, connection)?;
+            // Since actor threads are stopped on Drop, we just sleep here to let them tick a bit.
+            // In a real application the Torrents would be stored in some kind of data structure
+            // and the actor threads would be started and stopped as the user is manipulating the GUI.
+            std::thread::sleep(std::time::Duration::from_secs(10));
         }
         Cli::Seed {
             ip,

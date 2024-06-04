@@ -1,6 +1,7 @@
+use eyre::Result;
 use nom::branch::alt;
 use nom::combinator::map;
-use nom::IResult;
+use nom::{IResult, Offset};
 
 use crate::messages::handshake::Handshake;
 use crate::messages::unknown::Unknown;
@@ -9,10 +10,38 @@ use crate::SansIo;
 pub mod handshake;
 mod unknown;
 
+/// Wrapper type for all messages that can be sent or received.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
     Handshake(Handshake),
     Unknown(Unknown),
+}
+
+impl Message {
+    /// Decode a message from a buffer, which might only contain a part of the message.
+    /// Returns `Ok(None)` if the message was incomplete, and more data is needed.
+    /// Returns `Err` if the message format was invalid.
+    pub fn from_partial_buffer(buffer: &[u8]) -> Result<Option<DecodedMessage>> {
+        let (i, message) = map(Message::decode, Some)(buffer).or_else(|e| match e {
+            nom::Err::Incomplete(_) => Ok((buffer, None)),
+            e => Err(e.to_owned()),
+        })?;
+        if let Some(message) = message {
+            Ok(Some(DecodedMessage {
+                consumed_bytes: buffer.offset(i),
+                message,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+/// The outcome of trying to decode a message from a buffer.
+pub struct DecodedMessage {
+    /// The number of bytes consumed by the decoder.
+    pub consumed_bytes: usize,
+    pub message: Message,
 }
 
 impl SansIo for Message {
