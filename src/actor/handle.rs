@@ -13,7 +13,7 @@ use crate::actor::outcome::Outcome;
 #[derive(Debug)]
 pub struct Handle<A>
 where
-    A: Actor + Send + 'static,
+    A: Actor,
 {
     join_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     sender: Sender<Action<A>>,
@@ -22,7 +22,7 @@ where
 // Manual Clone implementation because A does not need to be Clone for Handle<A> to be Clone.
 impl<A> Clone for Handle<A>
 where
-    A: Actor + Send + 'static,
+    A: Actor,
 {
     fn clone(&self) -> Self {
         Self {
@@ -34,7 +34,7 @@ where
 
 impl<A> Handle<A>
 where
-    A: Actor + Send + 'static,
+    A: Actor,
 {
     /// Turns almost any Send self-mutating type into an actor.
     /// The only requirement is that it implements the Actor trait.
@@ -122,5 +122,31 @@ mod tests {
         let actor = TestActor::default();
         Handle::spawn(actor.clone());
         assert!(actor.handle.lock().unwrap().is_some());
+    }
+
+    #[derive(Default, Clone)]
+    struct CyclicActorA {
+        other: Arc<Mutex<Option<Handle<CyclicActorB>>>>,
+    }
+
+    #[derive(Default, Clone)]
+    struct CyclicActorB {
+        other: Arc<Mutex<Option<Handle<CyclicActorA>>>>,
+    }
+
+    impl Actor for CyclicActorA {}
+
+    impl Actor for CyclicActorB {}
+
+    #[test]
+    fn cyclic_structure_can_be_stopped() {
+        let a = CyclicActorA::default();
+        let b = CyclicActorB::default();
+        let handle_a = Handle::spawn(a.clone());
+        let handle_b = Handle::spawn(b.clone());
+        *a.other.lock().unwrap() = Some(handle_b.clone());
+        *b.other.lock().unwrap() = Some(handle_a.clone());
+        handle_a.stop();
+        handle_b.stop();
     }
 }
