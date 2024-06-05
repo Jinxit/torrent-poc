@@ -6,34 +6,37 @@ use tracing::info;
 
 use torrent_poc::{InfoHash, PeerId, StdIoConnection, Torrent};
 
-/// A simple program to handshake with a known BitTorrent peer for a given Torrent info hash
+/// A simple program to handshake with a known BitTorrent peer for a given Torrent info hash.
 ///
 /// Normally torrent clients and servers are the same thing (as it's a P2P protocol),
-/// and the "leechers" would find "seeders" from a tracker or DHT. Having this CLI lets me
-/// implement the core protocol without first having to implement tracker or DHT protocols.
+/// and the "leechers" would find "seeders" (and other leechers) from a tracker or DHT.
+/// Having this CLI lets me implement the core protocol without first having to implement
+/// tracker or DHT protocols.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 enum Cli {
+    /// Connect to a known peer and start downloading a torrent.
     Leech {
-        /// IP address of the known peer
+        /// IP address of the known peer.
         #[arg(long)]
         ip: IpAddr,
 
-        /// Port of the known peer
+        /// Port of the known peer.
         #[arg(long)]
         port: u16,
 
-        /// Info hash of the torrent to leech
+        /// Info hash of the torrent to leech.
         #[arg(long)]
         info_hash: InfoHash,
     },
+    /// Listen for incoming connections and start seeding a torrent.
     Seed {
         /// IP address to listen on (defaults to all interfaces)
         #[arg(long, default_value = "0.0.0.0")]
         ip: IpAddr,
 
         /// Port to listen on (defaults to a random port)
-        #[arg(long, default_value = "0")]
+        #[arg(long, default_value_t = 0)]
         port: u16,
 
         /// Info hash of the torrent to seed

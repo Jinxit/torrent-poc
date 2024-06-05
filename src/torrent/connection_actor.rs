@@ -6,7 +6,7 @@ use tracing::info;
 use crate::actor::actor::Actor;
 use crate::actor::handle::Handle;
 use crate::actor::outcome::Outcome;
-use crate::messages::handshake::Handshake;
+use crate::messages::Handshake;
 use crate::messages::Message;
 use crate::torrent::torrent_actor::TorrentActor;
 use crate::{Connection, InfoHash, PeerId};
@@ -56,7 +56,7 @@ impl ConnectionActor {
                 .peer_id
                 .is_some_and(|expected| expected != handshake.peer_id)
             {
-                bail!("Peer sent an incorrect peer id");
+                bail!("Peer sent an incorrect peer ID");
             }
             self.peer_id = Some(handshake.peer_id);
 
@@ -101,7 +101,7 @@ impl ConnectionActor {
                 .peer_id
                 .is_some_and(|expected| expected != handshake.peer_id)
             {
-                bail!("Peer sent an incorrect peer id");
+                bail!("Peer sent an incorrect peer ID");
             }
             self.peer_id = Some(handshake.peer_id);
 
@@ -139,7 +139,7 @@ impl ConnectionActor {
     pub fn send(&mut self, _message: String) -> Result<Outcome> {
         info!(
             "TorrentActor sending message to peer {}",
-            self.peer_id.unwrap()
+            self.peer_id.expect("peer to be connected")
         );
         // TODO: This doesn't do anything yet, but showcases the expected structure of the code.
         Ok(Outcome::Continue)

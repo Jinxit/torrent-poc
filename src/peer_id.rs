@@ -16,13 +16,13 @@ use crate::SansIo;
 pub struct PeerId([u8; 20]);
 
 impl PeerId {
-    /// Create a fixed peer id from a byte array.
+    /// Create a fixed peer ID from a byte array.
     #[must_use]
     pub fn new(hash: [u8; 20]) -> Self {
         Self(hash)
     }
 
-    /// Create a random peer id using a supplied identifier and version number.
+    /// Create a random peer ID using a supplied identifier and version number.
     ///
     /// This makes a few assumptions about the version number:
     /// - Major fits in a single base58 character (0-57)
@@ -95,7 +95,7 @@ impl SansIo for PeerId {
 
 impl Display for PeerId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // Most torrent clients assume the peer id is a string, so we'll do the same.
+        // Most torrent clients assume the peer ID is a string, so we'll do the same.
         // Even if it displays poorly for some clients, most users won't even see this.
         write!(f, "{}", String::from_utf8_lossy(&self.0))
     }

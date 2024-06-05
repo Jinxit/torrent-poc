@@ -3,14 +3,15 @@ use nom::branch::alt;
 use nom::combinator::map;
 use nom::{IResult, Offset};
 
-use crate::messages::handshake::Handshake;
-use crate::messages::keep_alive::KeepAlive;
-use crate::messages::unknown::Unknown;
+pub use handshake::Handshake;
+pub use keep_alive::KeepAlive;
+pub use unknown::Unknown;
+
 use crate::SansIo;
 
-pub mod handshake;
-pub mod keep_alive;
-pub mod unknown;
+mod handshake;
+mod keep_alive;
+mod unknown;
 
 /// Wrapper type for all messages that can be sent or received.
 #[derive(Debug, Clone, PartialEq, Eq)]

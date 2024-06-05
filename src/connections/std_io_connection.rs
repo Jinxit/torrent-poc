@@ -159,8 +159,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::sync::{Arc, Mutex};
 
-    use crate::messages::handshake::Handshake;
-    use crate::sans_io::SansIo;
+    use crate::messages::Handshake;
     use crate::{InfoHash, PeerId};
 
     use super::*;
