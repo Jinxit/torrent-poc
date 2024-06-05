@@ -81,6 +81,11 @@ impl TorrentActor {
         self.connections.remove(&peer_id);
         info!("TorrentActor removed connection to peer {}", peer_id);
     }
+
+    #[cfg(test)]
+    pub fn has_connection(&self, peer_id: PeerId) -> bool {
+        self.connections.contains_key(&peer_id)
+    }
 }
 
 impl Actor for TorrentActor {
@@ -92,7 +97,7 @@ impl Actor for TorrentActor {
 impl Drop for TorrentActor {
     fn drop(&mut self) {
         for connection in self.connections.values() {
-            connection.stop();
+            let _ = connection.stop();
         }
     }
 }

@@ -15,7 +15,7 @@ use crate::{Connection, InfoHash, PeerId};
 pub struct ConnectionActor {
     handle: Option<Handle<ConnectionActor>>,
     own_peer_id: PeerId,
-    expected_peer_id: Option<PeerId>,
+    peer_id: Option<PeerId>,
     info_hash: InfoHash,
     torrent: Handle<TorrentActor>,
     connection: Option<Box<dyn Connection + Send + 'static>>,
@@ -32,7 +32,7 @@ impl ConnectionActor {
         Self {
             handle: None,
             own_peer_id,
-            expected_peer_id,
+            peer_id: expected_peer_id,
             info_hash,
             torrent,
             connection: Some(Box::new(connection)),
@@ -53,12 +53,12 @@ impl ConnectionActor {
             }
 
             if self
-                .expected_peer_id
+                .peer_id
                 .is_some_and(|expected| expected != handshake.peer_id)
             {
                 bail!("Peer sent an incorrect peer id");
             }
-            self.expected_peer_id = Some(handshake.peer_id);
+            self.peer_id = Some(handshake.peer_id);
 
             let handle = self.handle.clone().ok_or_eyre("Handle not set")?;
             self.torrent.act({
@@ -77,7 +77,7 @@ impl ConnectionActor {
                 while let Ok(message) = connection.receive() {
                     info!("Actor received message: {:?}", message);
                 }
-                handle.stop();
+                handle.stop().expect("thread to not panic");
             });
         } else {
             bail!("Expected handshake message, peer sent something else: {message:?}");
@@ -98,12 +98,12 @@ impl ConnectionActor {
             }
 
             if self
-                .expected_peer_id
+                .peer_id
                 .is_some_and(|expected| expected != handshake.peer_id)
             {
                 bail!("Peer sent an incorrect peer id");
             }
-            self.expected_peer_id = Some(handshake.peer_id);
+            self.peer_id = Some(handshake.peer_id);
 
             connection.send(Message::Handshake(Handshake::new(
                 self.info_hash,
@@ -127,7 +127,7 @@ impl ConnectionActor {
                 while let Ok(message) = connection.receive() {
                     info!("Actor received message: {:?}", message);
                 }
-                handle.stop();
+                handle.stop().expect("thread to not panic");
             });
         } else {
             bail!("Expected handshake message, peer sent something else: {message:?}");
@@ -139,7 +139,7 @@ impl ConnectionActor {
     pub fn send(&mut self, _message: String) -> Result<Outcome> {
         info!(
             "TorrentActor sending message to peer {}",
-            self.expected_peer_id.unwrap()
+            self.peer_id.unwrap()
         );
         // TODO: This doesn't do anything yet, but showcases the expected structure of the code.
         Ok(Outcome::Continue)
@@ -152,7 +152,7 @@ impl Actor for ConnectionActor {
     }
 
     fn stop(&mut self) {
-        if let Some(peer_id) = self.expected_peer_id {
+        if let Some(peer_id) = self.peer_id {
             let _ = self.torrent.act(move |torrent| {
                 torrent.remove_connection(peer_id);
                 Ok(Outcome::Continue)
@@ -165,10 +165,125 @@ impl Debug for ConnectionActor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConnectionActor")
             .field("own_peer_id", &self.own_peer_id)
-            .field("expected_peer_id", &self.expected_peer_id)
+            .field("expected_peer_id", &self.peer_id)
             .field("info_hash", &self.info_hash)
             .field("torrent", &self.torrent)
             .field("handle", &self.handle)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
+    use thread::sleep;
+
+    use eyre::{eyre, Result};
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct MockConnection {
+        sent_messages: Arc<Mutex<Vec<Message>>>,
+        queued_for_receive: Arc<Mutex<VecDeque<Message>>>,
+    }
+
+    impl MockConnection {
+        fn new(queued_for_receive: VecDeque<Message>) -> Self {
+            Self {
+                sent_messages: Default::default(),
+                queued_for_receive: Arc::new(Mutex::new(queued_for_receive)),
+            }
+        }
+    }
+
+    impl Connection for MockConnection {
+        fn send(&mut self, message: Message) -> Result<()> {
+            self.sent_messages.lock().unwrap().push(message.clone());
+            Ok(())
+        }
+
+        fn receive(&self) -> Result<Message> {
+            self.queued_for_receive
+                .lock()
+                .unwrap()
+                .pop_front()
+                // This simulates not getting any more network messages for 1 second, then
+                // closing the connection.
+                // The reason for this is that the `receive()` method will block until a message
+                // is received, and in the test we want to verify that a connection exists -
+                // if it is closed instantly, there's no way to verify that.
+                .ok_or_else(|| {
+                    sleep(Duration::from_secs(1));
+                    eyre!("no message")
+                })
+        }
+    }
+
+    #[test]
+    fn initiate_handshake() {
+        // This test is a bit of a doozy.
+        // I would love to improve it, but it works for now.
+        let client_id = PeerId::new([1; 20]);
+        let server_id = PeerId::new([3; 20]);
+        let info_hash = InfoHash::new([2; 20]);
+        let torrent_actor = Handle::spawn(TorrentActor::new(client_id, info_hash));
+
+        let client_handshake = Message::Handshake(Handshake::new(info_hash, client_id));
+        let server_handshake = Message::Handshake(Handshake::new(info_hash, server_id));
+        let connection = MockConnection::new(VecDeque::from([server_handshake]));
+
+        let connection_actor = Handle::spawn(ConnectionActor::new(
+            client_id,
+            None,
+            connection.clone(),
+            info_hash,
+            torrent_actor.clone(),
+        ));
+
+        connection_actor
+            .act(ConnectionActor::initiate_handshake)
+            .unwrap();
+
+        sleep(Duration::from_millis(100));
+
+        connection_actor
+            .act(move |connection_actor| {
+                assert_eq!(Some(server_id), connection_actor.peer_id);
+                Ok(Outcome::Continue)
+            })
+            .unwrap();
+        torrent_actor
+            .act(move |torrent_actor| {
+                assert!(torrent_actor.has_connection(server_id));
+                Ok(Outcome::Continue)
+            })
+            .unwrap();
+
+        sleep(Duration::from_millis(100));
+
+        assert_eq!(
+            *connection.sent_messages.lock().unwrap(),
+            vec![client_handshake]
+        );
+        assert_eq!(*connection.queued_for_receive.lock().unwrap(), vec![]);
+
+        connection_actor.stop().unwrap();
+
+        sleep(Duration::from_millis(100));
+
+        torrent_actor
+            .act(move |torrent_actor| {
+                assert!(!torrent_actor.has_connection(server_id));
+                Ok(Outcome::Continue)
+            })
+            .unwrap();
+
+        sleep(Duration::from_millis(100));
+
+        torrent_actor.stop().unwrap();
     }
 }

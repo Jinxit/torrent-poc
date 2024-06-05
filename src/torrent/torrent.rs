@@ -57,6 +57,6 @@ impl Torrent {
 /// disk corruption.
 impl Drop for Torrent {
     fn drop(&mut self) {
-        self.actor.stop();
+        let _ = self.actor.stop();
     }
 }
