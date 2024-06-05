@@ -4,16 +4,19 @@ use nom::combinator::map;
 use nom::{IResult, Offset};
 
 use crate::messages::handshake::Handshake;
+use crate::messages::keep_alive::KeepAlive;
 use crate::messages::unknown::Unknown;
 use crate::SansIo;
 
 pub mod handshake;
-mod unknown;
+pub mod keep_alive;
+pub mod unknown;
 
 /// Wrapper type for all messages that can be sent or received.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
     Handshake(Handshake),
+    KeepAlive(KeepAlive),
     Unknown(Unknown),
 }
 
@@ -47,13 +50,15 @@ pub struct DecodedMessage {
 impl SansIo for Message {
     fn decode(i: &[u8]) -> IResult<&[u8], Self> {
         let handshake = map(Handshake::decode, Message::Handshake);
+        let keep_alive = map(KeepAlive::decode, Message::KeepAlive);
         let unknown = map(Unknown::decode, Message::Unknown);
-        alt((handshake, unknown))(i)
+        alt((handshake, keep_alive, unknown))(i)
     }
 
     fn encode(&self) -> Vec<u8> {
         match self {
             Message::Handshake(handshake) => handshake.encode(),
+            Message::KeepAlive(keep_alive) => keep_alive.encode(),
             Message::Unknown(unknown) => unknown.encode(),
         }
     }
@@ -69,6 +74,17 @@ mod tests {
     fn roundtrip_handshake() {
         let message =
             Message::Handshake(Handshake::new(InfoHash::new([1; 20]), PeerId::new([2; 20])));
+
+        let encoded = message.encode();
+        let (remaining, decoded) = Message::decode(&encoded).unwrap();
+
+        assert_eq!(message, decoded);
+        assert_eq!(remaining.len(), 0);
+    }
+
+    #[test]
+    fn roundtrip_keep_alive() {
+        let message = Message::KeepAlive(KeepAlive);
 
         let encoded = message.encode();
         let (remaining, decoded) = Message::decode(&encoded).unwrap();
