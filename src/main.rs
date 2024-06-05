@@ -28,6 +28,14 @@ enum Cli {
         /// Info hash of the torrent to leech.
         #[arg(long)]
         info_hash: InfoHash,
+
+        /// Malicious mode, if set the client will attempt a (pretty lame) denial-of-service attack
+        /// by sending a lot of keep-alive messages to the peer.
+        /// This is useful for testing the client's ability to handle a large number of connections.
+        ///
+        /// *Consent is important.*
+        #[arg(long, default_value_t = false)]
+        malicious: bool,
     },
     /// Listen for incoming connections and start seeding a torrent.
     Seed {
@@ -61,6 +69,7 @@ fn main() -> Result<(), eyre::Report> {
             ip,
             port,
             info_hash,
+            malicious,
         } => {
             info!("Connecting to peer at {}:{}", ip, port);
             info!("Info hash: {}", info_hash);
@@ -70,6 +79,13 @@ fn main() -> Result<(), eyre::Report> {
             let writer = BufWriter::new(stream);
             let (connection_write, connection_read) = std_io_connection(1024, reader, writer);
             torrent.connect_to_peer(None, connection_read, connection_write)?;
+            if malicious {
+                warn!("Running in malicious mode, sending a lot of keep-alive messages");
+                // Time to be mean. Send a lot of keep-alive messages to the peer.
+                for _ in 0..1000 {
+                    torrent.send_keep_alive()?;
+                }
+            }
             // Since actor threads are stopped on Drop, we just sleep here to let them tick a bit.
             // In a real application the Torrents would be stored in some kind of data structure
             // and the actor threads would be started and stopped as the user is manipulating the GUI.
