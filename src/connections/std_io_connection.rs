@@ -244,12 +244,11 @@ mod tests {
     fn test_send_ok() {
         let writer = MockWriter::default();
         let reader = MockReader::default();
-        let (mut connection_write, connection_read) =
-            std_io_connection(1024, reader.clone(), writer.clone());
+        let (mut connection_write, _) = std_io_connection(1024, reader.clone(), writer.clone());
         let handshake = Handshake::new(InfoHash::new([1; 20]), PeerId::new([2; 20]));
 
         connection_write
-            .send(Message::Handshake(handshake.clone()))
+            .send(Message::Handshake(handshake))
             .unwrap();
 
         assert_eq!(
@@ -263,8 +262,7 @@ mod tests {
         let writer = MockWriter::default();
         let handshake = Handshake::new(InfoHash::new([1; 20]), PeerId::new([2; 20]));
         let reader = MockReader::new(vec![handshake.encode()]);
-        let (connection_write, connection_read) =
-            std_io_connection(1024, reader.clone(), writer.clone());
+        let (_, connection_read) = std_io_connection(1024, reader.clone(), writer.clone());
 
         let message = connection_read.receive().unwrap();
 
@@ -277,8 +275,7 @@ mod tests {
         let writer = MockWriter::default();
         let handshake = Handshake::new(InfoHash::new([11; 20]), PeerId::new([22; 20]));
         let reader = MockReader::new(vec![handshake.encode()]);
-        let (connection_write, connection_read) =
-            std_io_connection(1, reader.clone(), writer.clone());
+        let (_, connection_read) = std_io_connection(1, reader.clone(), writer.clone());
 
         let message = connection_read.receive().unwrap();
 
@@ -301,8 +298,7 @@ mod tests {
             handshake_bytes[..split_point].to_vec(),
             handshake_bytes[split_point..].to_vec(),
         ]);
-        let (connection_write, connection_read) =
-            std_io_connection(1024, reader.clone(), writer.clone());
+        let (_, connection_read) = std_io_connection(1024, reader.clone(), writer.clone());
 
         let message = connection_read.receive().unwrap();
 
@@ -327,8 +323,7 @@ mod tests {
         let part2_bytes = handshake2_bytes[split_point..].to_vec();
 
         let reader = MockReader::new(vec![part1_bytes.clone(), part2_bytes.clone()]);
-        let (connection_write, connection_read) =
-            std_io_connection(1024, reader.clone(), writer.clone());
+        let (_, connection_read) = std_io_connection(1024, reader.clone(), writer.clone());
 
         let message1 = connection_read.receive().unwrap();
         let message2 = connection_read.receive().unwrap();
@@ -348,8 +343,7 @@ mod tests {
         // id 15 is not a valid message type
         // length of the message is 4 + 1 + 4 = 9, but the length is encoded as a u32, so split it
         let reader = MockReader::new(vec![[0, 0, 0, 9, 15].to_vec(), b"test".to_vec()]);
-        let (connection_write, connection_read) =
-            std_io_connection(1024, reader.clone(), writer.clone());
+        let (_, connection_read) = std_io_connection(1024, reader.clone(), writer.clone());
 
         let _ = connection_read.receive().unwrap_err();
     }

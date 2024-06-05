@@ -86,14 +86,14 @@ mod tests {
     #[test]
     fn display() {
         let hash = InfoHash::new(HASH_BYTES);
-        let formatted = format!("{}", hash);
+        let formatted = format!("{hash}");
         assert_eq!(formatted, HASH);
     }
 
     #[test]
     fn debug() {
         let hash = InfoHash::new(HASH_BYTES);
-        let formatted = format!("{:?}", hash);
-        assert_eq!(formatted, format!("InfoHash({})", HASH));
+        let formatted = format!("{hash:?}");
+        assert_eq!(formatted, format!("InfoHash({HASH})"));
     }
 }

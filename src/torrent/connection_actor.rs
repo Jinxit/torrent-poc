@@ -184,7 +184,7 @@ impl Debug for ConnectionActor {
             .field("info_hash", &self.info_hash)
             .field("torrent", &self.torrent)
             .field("handle", &self.handle)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -209,7 +209,7 @@ mod tests {
     impl MockConnection {
         fn new(queued_for_receive: VecDeque<Message>) -> Self {
             Self {
-                sent_messages: Default::default(),
+                sent_messages: Arc::default(),
                 queued_for_receive: Arc::new(Mutex::new(queued_for_receive)),
             }
         }

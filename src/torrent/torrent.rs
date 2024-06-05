@@ -18,6 +18,7 @@ impl Torrent {
     ///
     /// After this call, the torrent is not connected to any peers, so make sure to call
     /// `connect_to_peer` or `accept_peer_connection` to actually initiate communication.
+    #[must_use]
     pub fn new(own_peer_id: PeerId, info_hash: InfoHash) -> Self {
         let actor = Handle::spawn(TorrentActor::new(own_peer_id, info_hash));
         Self { actor }

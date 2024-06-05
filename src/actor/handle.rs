@@ -90,11 +90,11 @@ where
                 if let Some(handle) = guard.take() {
                     if let Err(e) = handle.join() {
                         let msg = if let Some(msg) = e.downcast_ref::<&'static str>() {
-                            msg.to_string()
+                            (*msg).to_string()
                         } else if let Some(msg) = e.downcast_ref::<String>() {
                             msg.clone()
                         } else {
-                            format!("?{:?}", e)
+                            format!("?{e:?}")
                         };
                         bail!("Panic in actor thread: {msg}");
                     }

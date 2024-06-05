@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display, Formatter};
 
 use base58::ToBase58;
-use eyre::{bail, Result};
+use eyre::{bail, eyre, Result};
 use nom::bytes::streaming::take;
 use nom::combinator::map_res;
 use rand::Rng;
@@ -42,7 +42,7 @@ impl PeerId {
         hash.push(major_bytes[0]);
 
         let minor_str = [
-            [(minor / 58) as u8].to_base58(),
+            [u8::try_from(minor / 58)?].to_base58(),
             [(minor % 58) as u8].to_base58(),
         ];
         if minor_str[0].len() != 1 || minor_str[1].len() != 1 {
@@ -68,7 +68,9 @@ impl PeerId {
         // but I just like base58. Compact but readable.
         let random_bytes = random_base58_bytes(&mut rng, 12);
         hash.extend_from_slice(&random_bytes);
-        let hash = hash.try_into().expect("hash to be 20 bytes");
+        let hash = hash.try_into().map_err(|_| {
+            eyre!("Hash should always work out to 20 bytes, this is a bug in PeerId.")
+        })?;
         Ok(Self(hash))
     }
 }
@@ -185,14 +187,14 @@ mod tests {
     #[test]
     fn display() {
         let hash = PeerId::new(*PEER_BYTES);
-        let formatted = format!("{}", hash);
+        let formatted = format!("{hash}");
         assert_eq!(formatted, PEER);
     }
 
     #[test]
     fn debug() {
         let hash = PeerId::new(*PEER_BYTES);
-        let formatted = format!("{:?}", hash);
-        assert_eq!(formatted, format!("PeerId({})", PEER));
+        let formatted = format!("{hash:?}");
+        assert_eq!(formatted, format!("PeerId({PEER})"));
     }
 }
