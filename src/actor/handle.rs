@@ -2,7 +2,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, TryLockError};
 use std::thread::JoinHandle;
 
-use eyre::{eyre, Result};
+use eyre::{bail, eyre, Result};
 use tracing::error;
 
 use crate::actor::action::Action;
@@ -81,7 +81,7 @@ where
     /// queued actions, and then stop itself.
     /// This will block until the actor thread has stopped, or return immediately if it is already
     /// stopped or is currently being stopped by another thread.
-    pub fn stop(&self) {
+    pub fn stop(&self) -> Result<()> {
         // Attempt to stop the actor thread if it isn't already stopped.
         // TODO: Use a separate high-priority one-shot channel to signal the actor thread to stop.
         let _ = self.act(|_| Ok(Outcome::Stop));
@@ -89,7 +89,14 @@ where
             Ok(mut guard) => {
                 if let Some(handle) = guard.take() {
                     if let Err(e) = handle.join() {
-                        error!("Failed to join actor thread: {:?}", e);
+                        let msg = if let Some(msg) = e.downcast_ref::<&'static str>() {
+                            msg.to_string()
+                        } else if let Some(msg) = e.downcast_ref::<String>() {
+                            msg.clone()
+                        } else {
+                            format!("?{:?}", e)
+                        };
+                        bail!("Panic in actor thread: {msg}");
                     }
                 }
             }
@@ -98,9 +105,11 @@ where
                 // If this would block, the actor thread is already about to be stopped from another thread.
             }
             Err(TryLockError::Poisoned(_)) => {
-                panic!("Actor thread poisoned");
+                bail!("Actor thread poisoned");
             }
         }
+
+        Ok(())
     }
 }
 
@@ -151,7 +160,7 @@ mod tests {
         let handle_b = Handle::spawn(b.clone());
         *a.other.lock().unwrap() = Some(handle_b.clone());
         *b.other.lock().unwrap() = Some(handle_a.clone());
-        handle_a.stop();
-        handle_b.stop();
+        handle_a.stop().unwrap();
+        handle_b.stop().unwrap();
     }
 }
