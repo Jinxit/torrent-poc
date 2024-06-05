@@ -4,7 +4,7 @@ use tracing::info;
 use crate::actor::handle::Handle;
 use crate::actor::outcome::Outcome;
 use crate::torrent::torrent_actor::TorrentActor;
-use crate::{Connection, InfoHash, PeerId};
+use crate::{ConnectionRead, ConnectionWrite, InfoHash, PeerId};
 
 /// This is the main entry point for this library, a "root aggregate" if you will.
 /// It's a cloneable handle (reference) to the torrent actor.
@@ -33,10 +33,11 @@ impl Torrent {
     pub fn connect_to_peer(
         &self,
         expected_peer_id: Option<PeerId>,
-        connection: impl Connection + Send + 'static,
+        connection_read: impl ConnectionRead + Send + 'static,
+        connection_write: impl ConnectionWrite + Send + 'static,
     ) -> Result<()> {
         self.actor.act(move |torrent| {
-            torrent.connect_to_peer(expected_peer_id, connection)?;
+            torrent.connect_to_peer(expected_peer_id, connection_read, connection_write)?;
             Ok(Outcome::Continue)
         })
     }
@@ -50,10 +51,11 @@ impl Torrent {
     pub fn accept_peer_connection(
         &self,
         expected_peer_id: Option<PeerId>,
-        connection: impl Connection + Send + 'static,
+        connection_read: impl ConnectionRead + Send + 'static,
+        connection_write: impl ConnectionWrite + Send + 'static,
     ) -> Result<()> {
         self.actor.act(move |torrent| {
-            torrent.accept_peer_connection(expected_peer_id, connection)?;
+            torrent.accept_peer_connection(expected_peer_id, connection_read, connection_write)?;
             Ok(Outcome::Continue)
         })
     }
@@ -63,6 +65,14 @@ impl Torrent {
         self.actor.act(move |torrent| {
             info!("Torrent sending message to peer {}", peer_id);
             torrent.send(peer_id, message)?;
+            Ok(Outcome::Continue)
+        })
+    }
+
+    /// This should be handled by the `ConnectionActor`, but it's implemented here for load testing.
+    pub fn send_keep_alive(&self) -> Result<()> {
+        self.actor.act(move |torrent| {
+            torrent.send_keep_alive()?;
             Ok(Outcome::Continue)
         })
     }

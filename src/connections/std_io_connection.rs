@@ -6,130 +6,145 @@ use std::sync::Arc;
 
 use eyre::Result;
 use eyre::WrapErr;
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 
 use crate::messages::{DecodedMessage, Message};
-use crate::{Connection, SansIo};
+use crate::{ConnectionRead, ConnectionWrite, SansIo};
 
-// 64 kB * 100 messages => at most 640 kB per connection
+// 64 kB * 10 messages => at most 640 kB per connection
+// In practice the first connection causes the application to allocate about ~10mB of memory,
+// but after that even malicious connections actually use a lot less than 640 kB each.
 const MAX_BUFFER_SIZE: usize = 64 * 1024;
-const MAX_BUFFERED_MESSAGES: usize = 100;
+const MAX_BUFFERED_MESSAGES: usize = 10;
 
-/// A `Connection` built on top of std::io::Read and std::io::Write.
-pub struct StdIoConnection<W> {
-    writer: W,
+/// A [ConnectionRead] implementation built on top of [std::io::Read].
+pub struct StdIoConnectionRead {
     receiver: Receiver<Message>,
     #[allow(dead_code)]
     state: Arc<ConnectionState>,
 }
 
-impl<W> StdIoConnection<W> {
-    /// Creates a new `StdIoConnection` with the given initial buffer size and reader/writer.
-    /// The buffer size is not an upper limit, it will be automatically grown as needed.
-    pub fn new<R>(initial_buffer_size: usize, reader: R, writer: W) -> Self
-    where
-        R: Read + Send + 'static,
-    {
-        let (sender, receiver) = std::sync::mpsc::sync_channel(MAX_BUFFERED_MESSAGES);
-        let state = Arc::new(ConnectionState::new());
-        // Letting this thread die on shutdown is fine, since the connection doesn't directly write
-        // to disk or anything, it's just a buffer that then communicates with the actors.
-        let _ = std::thread::spawn({
-            let state = state.clone();
-            move || Self::receive_loop(initial_buffer_size, reader, sender, state)
-        });
-        Self {
-            writer,
-            receiver,
-            state,
-        }
-    }
+/// A [ConnectionWrite] implementation built on top of [std::io::Write].
+pub struct StdIoConnectionWrite<W> {
+    writer: W,
+    #[allow(dead_code)]
+    state: Arc<ConnectionState>,
+}
 
-    fn receive_loop<R: Read>(
-        initial_buffer_size: usize,
-        mut reader: R,
-        sender: SyncSender<Message>,
-        _state: Arc<ConnectionState>,
-    ) {
-        let mut buffer = vec![255; initial_buffer_size];
-        let mut buffer_offset = 0;
-        'thread: loop {
-            'message: loop {
-                let bytes_read = match reader.read(&mut buffer[buffer_offset..]) {
-                    Ok(bytes_read) => bytes_read,
+/// Create a Connection built on top of [std::io::Read] and [std::io::Write].
+pub fn std_io_connection<R, W>(
+    initial_buffer_size: usize,
+    reader: R,
+    writer: W,
+) -> (StdIoConnectionWrite<W>, StdIoConnectionRead)
+where
+    R: Read + Send + 'static,
+    W: Write,
+{
+    let (sender, receiver) = std::sync::mpsc::sync_channel(MAX_BUFFERED_MESSAGES);
+    let state = Arc::new(ConnectionState::new());
+    // Letting this thread die on shutdown is fine, since the connection doesn't directly write
+    // to disk or anything, it's just a buffer that then communicates with the actors.
+    let _ = std::thread::spawn({
+        let state = state.clone();
+        move || receive_loop(initial_buffer_size, reader, sender, state)
+    });
+    let write = StdIoConnectionWrite {
+        writer,
+        state: state.clone(),
+    };
+    let read = StdIoConnectionRead { receiver, state };
+    (write, read)
+}
+
+fn receive_loop<R: Read>(
+    initial_buffer_size: usize,
+    mut reader: R,
+    sender: SyncSender<Message>,
+    _state: Arc<crate::connections::std_io_connection::ConnectionState>,
+) {
+    let mut buffer = vec![255; initial_buffer_size];
+    let mut buffer_offset = 0;
+    'thread: loop {
+        'message: loop {
+            let bytes_read = match reader.read(&mut buffer[buffer_offset..]) {
+                Ok(bytes_read) => bytes_read,
+                Err(e) => {
+                    warn!("error reading from the connection: {:?}", e);
+                    break 'thread;
+                }
+            };
+
+            if bytes_read == 0 {
+                break 'thread;
+            }
+
+            let opt_message =
+                match Message::from_partial_buffer(&buffer[..buffer_offset + bytes_read]) {
+                    Ok(opt_message) => opt_message,
                     Err(e) => {
-                        warn!("error reading from the connection: {:?}", e);
+                        error!("unexpected error decoding a message: {:?}", e);
                         break 'thread;
                     }
                 };
 
-                if bytes_read == 0 {
-                    break 'thread;
-                }
-
-                let opt_message =
-                    match Message::from_partial_buffer(&buffer[..buffer_offset + bytes_read]) {
-                        Ok(opt_message) => opt_message,
-                        Err(e) => {
-                            error!("unexpected error decoding a message: {:?}", e);
-                            break 'thread;
-                        }
-                    };
-
-                if let Some(DecodedMessage {
-                    consumed_bytes,
-                    message,
-                }) = opt_message
-                {
-                    // Reset the buffer, but keep the bytes we didn't consume.
-                    // This could probably be done more efficiently, perhaps with a separate offset
-                    // or using virtual memory tricks, but eh.
-                    buffer.copy_within(consumed_bytes.., 0);
-                    buffer_offset = buffer_offset + bytes_read - consumed_bytes;
-                    info!("Received message: {:?}", message);
+            if let Some(DecodedMessage {
+                consumed_bytes,
+                message,
+            }) = opt_message
+            {
+                // Reset the buffer, but keep the bytes we didn't consume.
+                // This could probably be done more efficiently, perhaps with a separate offset
+                // or using virtual memory tricks, but eh.
+                buffer.copy_within(consumed_bytes.., 0);
+                buffer_offset = buffer_offset + bytes_read - consumed_bytes;
+                if sender.try_send(message.clone()).is_err() {
+                    warn!("Receiver is full, waiting");
                     if sender.send(message).is_err() {
                         // The receiver is gone, we're probably about to exit; stop the thread
                         break 'thread;
                     }
-                    break 'message;
-                } else {
-                    // Either the buffer wasn't big enough to hold the message...
-                    if buffer.len() - buffer_offset == bytes_read {
-                        if buffer.len() == MAX_BUFFER_SIZE {
-                            // This client seems malicious, no messages should be this big.
-                            // Let's not use up all the available memory.
-                            break 'thread;
-                        }
-
-                        // Grow the buffer and try again.
-                        // `255` here is not a requirement, but it makes debugging easier.
-                        let mut new_buffer = vec![255; min(buffer.len() * 2, MAX_BUFFER_SIZE)];
-                        new_buffer[..buffer_offset + bytes_read]
-                            .copy_from_slice(&buffer[..buffer_offset + bytes_read]);
-                        buffer_offset += bytes_read;
-                        buffer = new_buffer;
-                    } else {
-                        // ...or the message was incomplete, just try again.
-                        buffer_offset += bytes_read;
+                }
+                break 'message;
+            } else {
+                // Either the buffer wasn't big enough to hold the message...
+                if buffer.len() - buffer_offset == bytes_read {
+                    if buffer.len() == MAX_BUFFER_SIZE {
+                        // This client seems malicious, no messages should be this big.
+                        // Let's not use up all the available memory.
+                        break 'thread;
                     }
+
+                    // Grow the buffer and try again.
+                    // `255` here is not a requirement, but it makes debugging easier.
+                    let mut new_buffer = vec![255; min(buffer.len() * 2, MAX_BUFFER_SIZE)];
+                    new_buffer[..buffer_offset + bytes_read]
+                        .copy_from_slice(&buffer[..buffer_offset + bytes_read]);
+                    buffer_offset += bytes_read;
+                    buffer = new_buffer;
+                } else {
+                    // ...or the message was incomplete, just try again.
+                    buffer_offset += bytes_read;
                 }
             }
         }
     }
 }
 
-impl<W: Write> Connection for StdIoConnection<W> {
+impl ConnectionRead for StdIoConnectionRead {
+    fn receive(&self) -> Result<Message> {
+        self.receiver
+            .recv()
+            .wrap_err("Connection closed, no more messages coming")
+    }
+}
+
+impl<W: Write> ConnectionWrite for StdIoConnectionWrite<W> {
     fn send(&mut self, message: Message) -> Result<()> {
         self.writer.write_all(&message.encode())?;
         // TODO: excessive flushing might not be a good idea, figure it out later
         self.writer.flush()?;
         Ok(())
-    }
-
-    fn receive(&self) -> Result<Message> {
-        self.receiver
-            .recv()
-            .wrap_err("Connection closed, no more messages coming")
     }
 }
 
@@ -229,10 +244,11 @@ mod tests {
     fn test_send_ok() {
         let writer = MockWriter::default();
         let reader = MockReader::default();
-        let mut connection = StdIoConnection::new(1024, reader.clone(), writer.clone());
+        let (mut connection_write, connection_read) =
+            std_io_connection(1024, reader.clone(), writer.clone());
         let handshake = Handshake::new(InfoHash::new([1; 20]), PeerId::new([2; 20]));
 
-        connection
+        connection_write
             .send(Message::Handshake(handshake.clone()))
             .unwrap();
 
@@ -247,9 +263,10 @@ mod tests {
         let writer = MockWriter::default();
         let handshake = Handshake::new(InfoHash::new([1; 20]), PeerId::new([2; 20]));
         let reader = MockReader::new(vec![handshake.encode()]);
-        let connection = StdIoConnection::new(1024, reader.clone(), writer.clone());
+        let (connection_write, connection_read) =
+            std_io_connection(1024, reader.clone(), writer.clone());
 
-        let message = connection.receive().unwrap();
+        let message = connection_read.receive().unwrap();
 
         assert_eq!(message, Message::Handshake(handshake));
         assert_eq!(*reader.reads.lock().unwrap(), vec![68]);
@@ -260,9 +277,10 @@ mod tests {
         let writer = MockWriter::default();
         let handshake = Handshake::new(InfoHash::new([11; 20]), PeerId::new([22; 20]));
         let reader = MockReader::new(vec![handshake.encode()]);
-        let connection = StdIoConnection::new(1, reader.clone(), writer.clone());
+        let (connection_write, connection_read) =
+            std_io_connection(1, reader.clone(), writer.clone());
 
-        let message = connection.receive().unwrap();
+        let message = connection_read.receive().unwrap();
 
         assert_eq!(message, Message::Handshake(handshake));
         assert_eq!(
@@ -283,9 +301,10 @@ mod tests {
             handshake_bytes[..split_point].to_vec(),
             handshake_bytes[split_point..].to_vec(),
         ]);
-        let connection = StdIoConnection::new(1024, reader.clone(), writer.clone());
+        let (connection_write, connection_read) =
+            std_io_connection(1024, reader.clone(), writer.clone());
 
-        let message = connection.receive().unwrap();
+        let message = connection_read.receive().unwrap();
 
         assert_eq!(message, Message::Handshake(handshake));
         assert_eq!(
@@ -308,10 +327,11 @@ mod tests {
         let part2_bytes = handshake2_bytes[split_point..].to_vec();
 
         let reader = MockReader::new(vec![part1_bytes.clone(), part2_bytes.clone()]);
-        let connection = StdIoConnection::new(1024, reader.clone(), writer.clone());
+        let (connection_write, connection_read) =
+            std_io_connection(1024, reader.clone(), writer.clone());
 
-        let message1 = connection.receive().unwrap();
-        let message2 = connection.receive().unwrap();
+        let message1 = connection_read.receive().unwrap();
+        let message2 = connection_read.receive().unwrap();
 
         assert_eq!(message1, Message::Handshake(handshake1));
         assert_eq!(message2, Message::Handshake(handshake2));
@@ -328,8 +348,9 @@ mod tests {
         // id 15 is not a valid message type
         // length of the message is 4 + 1 + 4 = 9, but the length is encoded as a u32, so split it
         let reader = MockReader::new(vec![[0, 0, 0, 9, 15].to_vec(), b"test".to_vec()]);
-        let connection = StdIoConnection::new(1024, reader.clone(), writer.clone());
+        let (connection_write, connection_read) =
+            std_io_connection(1024, reader.clone(), writer.clone());
 
-        let _ = connection.receive().unwrap_err();
+        let _ = connection_read.receive().unwrap_err();
     }
 }

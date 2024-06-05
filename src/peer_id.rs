@@ -9,7 +9,8 @@ use rand::Rng;
 use crate::SansIo;
 
 /// A 20 byte hash of a torrent, technically _any_ bytes but usually implemented as:
-/// -XY1234-<random characters>
+/// -XY1234-\<random characters\>
+///
 /// where XY is an application-specific identifier, 1234 is a version number, and the random
 /// characters are a unique identifier for the peer.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

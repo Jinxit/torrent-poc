@@ -2,9 +2,9 @@ use std::io::{BufReader, BufWriter};
 use std::net::{IpAddr, TcpListener, TcpStream};
 
 use clap::Parser;
-use tracing::info;
+use tracing::{info, warn};
 
-use torrent_poc::{InfoHash, PeerId, StdIoConnection, Torrent};
+use torrent_poc::{std_io_connection, InfoHash, PeerId, Torrent};
 
 /// A simple program to handshake with a known BitTorrent peer for a given Torrent info hash.
 ///
@@ -68,8 +68,8 @@ fn main() -> Result<(), eyre::Report> {
             let stream = TcpStream::connect((ip, port))?;
             let reader = BufReader::new(stream.try_clone()?);
             let writer = BufWriter::new(stream);
-            let connection = StdIoConnection::new(1024, reader, writer);
-            torrent.connect_to_peer(None, connection)?;
+            let (connection_write, connection_read) = std_io_connection(1024, reader, writer);
+            torrent.connect_to_peer(None, connection_read, connection_write)?;
             // Since actor threads are stopped on Drop, we just sleep here to let them tick a bit.
             // In a real application the Torrents would be stored in some kind of data structure
             // and the actor threads would be started and stopped as the user is manipulating the GUI.
@@ -87,8 +87,8 @@ fn main() -> Result<(), eyre::Report> {
                 let stream = stream?;
                 let reader = BufReader::new(stream.try_clone()?);
                 let writer = BufWriter::new(stream);
-                let connection = StdIoConnection::new(1024, reader, writer);
-                torrent.accept_peer_connection(None, connection)?;
+                let (connection_write, connection_read) = std_io_connection(1024, reader, writer);
+                torrent.accept_peer_connection(None, connection_read, connection_write)?;
             }
         }
     }

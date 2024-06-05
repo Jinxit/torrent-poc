@@ -1,15 +1,15 @@
 use std::fmt::Debug;
 
 use eyre::{bail, OptionExt, Result};
-use tracing::info;
+use tracing::{info, trace, warn};
 
 use crate::actor::actor::Actor;
 use crate::actor::handle::Handle;
 use crate::actor::outcome::Outcome;
-use crate::messages::Handshake;
 use crate::messages::Message;
+use crate::messages::{Handshake, KeepAlive};
 use crate::torrent::torrent_actor::TorrentActor;
-use crate::{Connection, InfoHash, PeerId};
+use crate::{ConnectionRead, ConnectionWrite, InfoHash, PeerId};
 
 /// This actor handles the connection to a single peer.
 pub struct ConnectionActor {
@@ -18,14 +18,16 @@ pub struct ConnectionActor {
     peer_id: Option<PeerId>,
     info_hash: InfoHash,
     torrent: Handle<TorrentActor>,
-    connection: Option<Box<dyn Connection + Send + 'static>>,
+    connection_read: Option<Box<dyn ConnectionRead + Send + 'static>>,
+    connection_write: Box<dyn ConnectionWrite + Send + 'static>,
 }
 
 impl ConnectionActor {
     pub fn new(
         own_peer_id: PeerId,
         expected_peer_id: Option<PeerId>,
-        connection: impl Connection + Send + 'static,
+        connection_read: impl ConnectionRead + Send + 'static,
+        connection_write: impl ConnectionWrite + Send + 'static,
         info_hash: InfoHash,
         torrent: Handle<TorrentActor>,
     ) -> Self {
@@ -35,18 +37,23 @@ impl ConnectionActor {
             peer_id: expected_peer_id,
             info_hash,
             torrent,
-            connection: Some(Box::new(connection)),
+            connection_read: Some(Box::new(connection_read)),
+            connection_write: Box::new(connection_write),
         }
     }
 
     /// Initiate handshake with a peer on an outgoing connection.
     pub fn initiate_handshake(&mut self) -> Result<Outcome> {
-        let mut connection = self.connection.take().expect("connection to be set");
-        connection.send(Message::Handshake(Handshake::new(
-            self.info_hash,
-            self.own_peer_id,
-        )))?;
-        let message = connection.receive()?;
+        self.connection_write
+            .send(Message::Handshake(Handshake::new(
+                self.info_hash,
+                self.own_peer_id,
+            )))?;
+        let connection_read = self
+            .connection_read
+            .take()
+            .expect("connection_read to be set");
+        let message = connection_read.receive()?;
         if let Message::Handshake(handshake) = message {
             if handshake.info_hash != self.info_hash {
                 bail!("Peer sent an incorrect info hash");
@@ -70,15 +77,7 @@ impl ConnectionActor {
             })?;
 
             info!("Connection established with peer {}", handshake.peer_id);
-            // TODO: Join handle?
-            let _ = std::thread::spawn(move || {
-                // `receive()` will block until a message is received, so it needs to be run in a
-                // separate thread.
-                while let Ok(message) = connection.receive() {
-                    info!("Actor received message: {:?}", message);
-                }
-                handle.stop().expect("thread to not panic");
-            });
+            Self::start_receive_loop(connection_read, handle);
         } else {
             bail!("Expected handshake message, peer sent something else: {message:?}");
         }
@@ -86,12 +85,27 @@ impl ConnectionActor {
         Ok(Outcome::Continue)
     }
 
+    fn start_receive_loop(
+        connection_read: Box<dyn ConnectionRead + Send>,
+        handle: Handle<ConnectionActor>,
+    ) {
+        // TODO: Join handle?
+        let _ = std::thread::spawn(move || {
+            // `receive()` will block until a message is received, so it needs to be run in a
+            // separate thread.
+            while let Ok(message) = connection_read.receive() {
+                trace!("Actor received message: {:?}", message);
+            }
+            handle.stop().expect("thread to not panic");
+        });
+    }
+
     /// Wait for a handshake from a peer on an incoming connection.
     pub fn await_handshake(&mut self) -> Result<Outcome> {
         // TODO: This has a lot of shared code with `initiate_handshake()`, refactor?
-        let mut connection = self.connection.take().expect("connection to be set");
+        let connection_read = self.connection_read.take().expect("connection to be set");
 
-        let message = connection.receive()?;
+        let message = connection_read.receive()?;
         if let Message::Handshake(handshake) = message {
             if handshake.info_hash != self.info_hash {
                 bail!("Peer sent an incorrect info hash");
@@ -105,10 +119,11 @@ impl ConnectionActor {
             }
             self.peer_id = Some(handshake.peer_id);
 
-            connection.send(Message::Handshake(Handshake::new(
-                self.info_hash,
-                self.own_peer_id,
-            )))?;
+            self.connection_write
+                .send(Message::Handshake(Handshake::new(
+                    self.info_hash,
+                    self.own_peer_id,
+                )))?;
 
             let handle = self.handle.clone().ok_or_eyre("Handle not set")?;
             self.torrent.act({
@@ -120,15 +135,7 @@ impl ConnectionActor {
             })?;
 
             info!("Connection established with peer {}", handshake.peer_id);
-            // TODO: Join handle?
-            let _ = std::thread::spawn(move || {
-                // `receive()` will block until a message is received, so it needs to be run in a
-                // separate thread.
-                while let Ok(message) = connection.receive() {
-                    info!("Actor received message: {:?}", message);
-                }
-                handle.stop().expect("thread to not panic");
-            });
+            Self::start_receive_loop(connection_read, handle);
         } else {
             bail!("Expected handshake message, peer sent something else: {message:?}");
         }
@@ -142,6 +149,14 @@ impl ConnectionActor {
             self.peer_id.expect("peer to be connected")
         );
         // TODO: This doesn't do anything yet, but showcases the expected structure of the code.
+        Ok(Outcome::Continue)
+    }
+
+    pub fn send_keep_alive(&mut self) -> Result<Outcome> {
+        warn!("Sending 10 keep-alives");
+        for _ in 0..10 {
+            self.connection_write.send(Message::KeepAlive(KeepAlive))?;
+        }
         Ok(Outcome::Continue)
     }
 }
@@ -200,12 +215,7 @@ mod tests {
         }
     }
 
-    impl Connection for MockConnection {
-        fn send(&mut self, message: Message) -> Result<()> {
-            self.sent_messages.lock().unwrap().push(message.clone());
-            Ok(())
-        }
-
+    impl ConnectionRead for MockConnection {
         fn receive(&self) -> Result<Message> {
             self.queued_for_receive
                 .lock()
@@ -220,6 +230,13 @@ mod tests {
                     sleep(Duration::from_secs(1));
                     eyre!("no message")
                 })
+        }
+    }
+
+    impl ConnectionWrite for MockConnection {
+        fn send(&mut self, message: Message) -> Result<()> {
+            self.sent_messages.lock().unwrap().push(message.clone());
+            Ok(())
         }
     }
 
@@ -239,6 +256,7 @@ mod tests {
         let connection_actor = Handle::spawn(ConnectionActor::new(
             client_id,
             None,
+            connection.clone(),
             connection.clone(),
             info_hash,
             torrent_actor.clone(),
